@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PacketReaper · Network Threat Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --navy:       #050d1a;
+  --navy2:      #0a1628;
+  --navy3:      #0f1f38;
+  --navy4:      #162847;
+  --amber:      #ff9500;
+  --amber2:     #ffb340;
+  --amber-dim:  #b36800;
+  --amber-glow: rgba(255,149,0,0.15);
+  --red:        #ff3b30;
+  --red-glow:   rgba(255,59,48,0.2);
+  --green:      #30d158;
+  --green-glow: rgba(48,209,88,0.15);
+  --blue:       #0a84ff;
+  --muted:      #4a6080;
+  --text:       #c8d8ec;
+  --text-dim:   #6a85a0;
+  --border:     rgba(255,149,0,0.18);
+  --border2:    rgba(10,132,255,0.2);
+  --font-head:  'Orbitron', monospace;
+  --font-mono:  'Share Tech Mono', monospace;
+  --font-body:  'Barlow Condensed', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--navy);
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Scanline overlay ── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.04) 2px,
+    rgba(0,0,0,0.04) 4px
+  );
+}
+
+/* ── Grid noise texture ── */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(255,149,0,0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 110%, rgba(10,132,255,0.05) 0%, transparent 60%);
+}
+
+/* ── Layout ── */
+.layout {
+  display: grid;
+  grid-template-rows: 64px 1fr;
+  grid-template-columns: 280px 1fr 260px;
+  grid-template-areas:
+    "header header header"
+    "left   main   right";
+  height: 100vh;
+  position: relative; z-index: 1;
+}
+
+/* ── Header ── */
+header {
+  grid-area: header;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 28px;
+  background: rgba(5,13,26,0.95);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+.logo {
+  display: flex; align-items: center; gap: 12px;
+}
+.logo-icon {
+  width: 36px; height: 36px;
+  position: relative;
+}
+.logo-icon svg { width: 100%; height: 100%; }
+.logo-text {
+  font-family: var(--font-head);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  color: var(--amber);
+  text-shadow: 0 0 20px rgba(255,149,0,0.5);
+}
+.logo-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  margin-top: 2px;
+}
+
+.header-status {
+  display: flex; align-items: center; gap: 24px;
+}
+
+.status-badge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.status-badge.idle {
+  border-color: var(--muted); color: var(--muted);
+  background: rgba(74,96,128,0.1);
+}
+.status-badge.active {
+  border-color: var(--green); color: var(--green);
+  background: var(--green-glow);
+  box-shadow: 0 0 12px rgba(48,209,88,0.2);
+}
+.status-badge .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor;
+  animation: none;
+}
+.status-badge.active .dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%,100% { opacity:1; transform:scale(1); }
+  50%      { opacity:0.4; transform:scale(0.7); }
+}
+
+.header-controls {
+  display: flex; gap: 10px;
+}
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  padding: 8px 18px;
+  border: 1px solid;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  background: transparent;
+}
+.btn-start {
+  border-color: var(--green); color: var(--green);
+}
+.btn-start:hover:not(:disabled) {
+  background: var(--green-glow);
+  box-shadow: 0 0 16px rgba(48,209,88,0.3);
+}
+.btn-stop {
+  border-color: var(--red); color: var(--red);
+}
+.btn-stop:hover:not(:disabled) {
+  background: var(--red-glow);
+  box-shadow: 0 0 16px rgba(255,59,48,0.3);
+}
+.btn:disabled { opacity: 0.35; cursor: default; }
+
+.header-stats {
+  display: flex; gap: 20px;
+}
+.hstat {
+  text-align: center;
+}
+.hstat-val {
+  font-family: var(--font-head);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--amber);
+  line-height: 1;
+}
+.hstat-lbl {
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 1.5px;
+  margin-top: 2px;
+}
+
+/* ── Sidebar Left ── */
+.sidebar-left {
+  grid-area: left;
+  background: var(--navy2);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.sidebar-left::-webkit-scrollbar { width: 4px; }
+.sidebar-left::-webkit-scrollbar-thumb { background: var(--navy4); }
+
+.panel {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-title {
+  font-family: var(--font-head);
+  font-size: 9px;
+  letter-spacing: 2.5px;
+  color: var(--amber-dim);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+
+/* Rule inputs */
+.rule-row {
+  display: flex; gap: 6px; margin-bottom: 8px;
+}
+.input-field {
+  flex: 1;
+  background: var(--navy);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 2px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.input-field:focus { border-color: var(--amber); }
+.input-field::placeholder { color: var(--muted); }
+
+.btn-sm {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 7px 12px;
+  border: 1px solid;
+  border-radius: 2px;
+  cursor: pointer;
+  background: transparent;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.btn-block  { border-color: var(--red);   color: var(--red);   }
+.btn-allow  { border-color: var(--green); color: var(--green); }
+.btn-amber  { border-color: var(--amber); color: var(--amber); }
+.btn-sm:hover { filter: brightness(1.3); }
+
+/* Block list */
+.block-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+.block-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px;
+  background: rgba(255,59,48,0.06);
+  border: 1px solid rgba(255,59,48,0.2);
+  border-radius: 2px;
+  animation: slide-in 0.2s ease;
+}
+@keyframes slide-in {
+  from { opacity:0; transform:translateX(-8px); }
+  to   { opacity:1; transform:translateX(0); }
+}
+.block-ip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--red);
+}
+.block-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.block-auto-badge {
+  font-size: 9px; letter-spacing: 1px;
+  padding: 2px 5px;
+  border-radius: 1px;
+  background: rgba(255,149,0,0.15);
+  color: var(--amber);
+  border: 1px solid rgba(255,149,0,0.3);
+}
+.btn-unblock {
+  font-size: 10px; padding: 2px 7px;
+  border: 1px solid var(--muted);
+  border-radius: 1px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  transition: all 0.15s;
+}
+.btn-unblock:hover { border-color: var(--green); color: var(--green); }
+
+/* Threat score bar */
+.score-bar-wrap { margin-top: 4px; }
+.score-bar-track {
+  height: 2px; background: var(--navy4); border-radius: 1px; overflow: hidden;
+}
+.score-bar-fill {
+  height: 100%; border-radius: 1px;
+  transition: width 0.4s;
+}
+
+/* ── Main Center ── */
+.main-area {
+  grid-area: main;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: var(--navy);
+}
+
+/* Stats strip */
+.stats-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+.stat-cell {
+  padding: 14px 20px;
+  border-right: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+}
+.stat-cell::before {
+  content: '';
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--amber);
+  transform: scaleX(0);
+  transition: transform 0.6s ease;
+  transform-origin: left;
+}
+.stat-cell.updated::before { transform: scaleX(1); }
+
+.stat-val {
+  font-family: var(--font-head);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--amber2);
+  line-height: 1;
+}
+.stat-val.danger { color: var(--red); }
+.stat-val.warn   { color: var(--amber); }
+.stat-lbl {
+  font-size: 10px; letter-spacing: 2px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+
+/* Packet feed table */
+.feed-header {
+  padding: 10px 16px 6px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.feed-title {
+  font-family: var(--font-head);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--amber-dim);
+}
+.feed-mode {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--blue);
+  letter-spacing: 1px;
+}
+
+.table-head {
+  display: grid;
+  grid-template-columns: 80px 120px 120px 60px 60px 70px 1fr 80px;
+  padding: 6px 16px;
+  background: var(--navy3);
+  border-bottom: 1px solid var(--border);
+}
+.th {
+  font-family: var(--font-head);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.feed-body {
+  flex: 1;
+  overflow-y: auto;
+}
+.feed-body::-webkit-scrollbar { width: 4px; }
+.feed-body::-webkit-scrollbar-thumb { background: var(--navy4); }
+
+.feed-row {
+  display: grid;
+  grid-template-columns: 80px 120px 120px 60px 60px 70px 1fr 80px;
+  padding: 6px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  align-items: center;
+  transition: background 0.15s;
+  animation: row-enter 0.25s ease;
+}
+@keyframes row-enter {
+  from { opacity: 0; background: rgba(255,149,0,0.06); }
+  to   { opacity: 1; background: transparent; }
+}
+.feed-row:hover { background: var(--navy3); }
+.feed-row.blocked { border-left: 2px solid var(--red); }
+.feed-row.alert   { border-left: 2px solid var(--amber); }
+.feed-row.allowed { border-left: 2px solid transparent; }
+
+.cell {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cell.src  { color: var(--text); }
+.cell.dst  { color: var(--blue); opacity: 0.7; }
+
+.action-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  border-radius: 1px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+.pill-block { background: var(--red-glow);   color: var(--red);   border: 1px solid rgba(255,59,48,0.4); }
+.pill-alert { background: var(--amber-glow); color: var(--amber); border: 1px solid rgba(255,149,0,0.4); }
+.pill-allow { background: var(--green-glow); color: var(--green); border: 1px solid rgba(48,209,88,0.25); }
+
+/* Mini threat score */
+.mini-score {
+  width: 40px; height: 4px;
+  background: var(--navy4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mini-score-fill { height: 100%; border-radius: 2px; }
+
+/* ── Sidebar Right ── */
+.sidebar-right {
+  grid-area: right;
+  background: var(--navy2);
+  border-left: 1px solid var(--border2);
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.sidebar-right::-webkit-scrollbar { width: 4px; }
+.sidebar-right::-webkit-scrollbar-thumb { background: var(--navy4); }
+
+/* Top talkers chart */
+.talker-row {
+  margin-bottom: 10px;
+}
+.talker-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 4px;
+}
+.talker-ip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+.talker-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber);
+}
+.talker-track {
+  height: 4px; background: var(--navy4); border-radius: 2px; overflow: hidden;
+}
+.talker-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--amber-dim), var(--amber2));
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+/* Activity spark */
+.spark-wrap {
+  height: 60px;
+  display: flex; align-items: flex-end; gap: 2px;
+  padding: 4px 0;
+}
+.spark-bar {
+  flex: 1;
+  background: var(--amber-dim);
+  border-radius: 1px 1px 0 0;
+  min-height: 2px;
+  transition: height 0.3s ease;
+}
+.spark-bar.red { background: var(--red); }
+
+/* Port blocks */
+.port-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  background: rgba(255,59,48,0.08);
+  border: 1px solid rgba(255,59,48,0.25);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--red);
+  margin: 2px;
+}
+.port-badge button {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 11px; line-height: 1;
+  padding: 0 2px;
+}
+.port-badge button:hover { color: var(--green); }
+
+/* Alert log */
+.alert-item {
+  padding: 8px 10px;
+  border-left: 2px solid var(--amber);
+  background: rgba(255,149,0,0.04);
+  margin-bottom: 4px;
+  border-radius: 0 2px 2px 0;
+  animation: slide-in 0.2s ease;
+}
+.alert-item.critical {
+  border-left-color: var(--red);
+  background: rgba(255,59,48,0.05);
+}
+.alert-ts {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.alert-msg {
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 2px;
+  letter-spacing: 0.3px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--navy4); border-radius: 2px; }
+
+/* Empty state */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; height: 200px;
+  color: var(--text-dim);
+  gap: 8px;
+}
+.empty-icon { font-size: 32px; opacity: 0.3; }
+.empty-text { font-family: var(--font-mono); font-size: 12px; letter-spacing: 1px; }
+</style>
+</head>
+
+<body>
+<div class="layout">
+
+<!-- ═══════════ HEADER ═══════════ -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="18,2 34,10 34,26 18,34 2,26 2,10" stroke="#ff9500" stroke-width="1.5" fill="rgba(255,149,0,0.08)"/>
+        <polygon points="18,7 29,13 29,23 18,29 7,23 7,13" stroke="#ff9500" stroke-width="1" fill="rgba(255,149,0,0.05)" stroke-dasharray="2 2"/>
+        <circle cx="18" cy="18" r="4" fill="#ff9500" opacity="0.9"/>
+        <line x1="18" y1="2"  x2="18" y2="14" stroke="#ff9500" stroke-width="1" opacity="0.4"/>
+        <line x1="18" y1="22" x2="18" y2="34" stroke="#ff9500" stroke-width="1" opacity="0.4"/>
+        <line x1="2"  y1="10" x2="14" y2="16" stroke="#ff9500" stroke-width="1" opacity="0.4"/>
+        <line x1="22" y1="20" x2="34" y2="26" stroke="#ff9500" stroke-width="1" opacity="0.4"/>
+        <line x1="34" y1="10" x2="22" y2="16" stroke="#ff9500" stroke-width="1" opacity="0.4"/>
+        <line x1="14" y1="20" x2="2"  y2="26" stroke="#ff9500" stroke-width="1" opacity="0.4"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-text">PACKETREAPER</div>
+      <div class="logo-sub">NETWORK THREAT MONITOR v1.0</div>
+    </div>
+  </div>
+
+  <div class="header-stats">
+    <div class="hstat">
+      <div class="hstat-val" id="h-pps">0</div>
+      <div class="hstat-lbl">PKT/SEC</div>
+    </div>
+    <div class="hstat">
+      <div class="hstat-val" id="h-total">0</div>
+      <div class="hstat-lbl">TOTAL</div>
+    </div>
+    <div class="hstat">
+      <div class="hstat-val" id="h-blocks" style="color:var(--red)">0</div>
+      <div class="hstat-lbl">BLOCKED</div>
+    </div>
+  </div>
+
+  <div class="header-controls">
+    <div class="status-badge idle" id="status-badge">
+      <span class="dot"></span>
+      <span id="status-text">IDLE</span>
+    </div>
+    <button class="btn btn-start" id="btn-start" onclick="startCapture()">▶ ENGAGE</button>
+    <button class="btn btn-stop" id="btn-stop" disabled onclick="stopCapture()">■ CEASE</button>
+  </div>
+</header>
+
+
+<!-- ═══════════ LEFT SIDEBAR ═══════════ -->
+<aside class="sidebar-left">
+
+  <div class="panel">
+    <div class="panel-title">⊗ IP FIREWALL</div>
+    <div class="rule-row">
+      <input class="input-field" id="ip-input" placeholder="Target IP..." maxlength="45">
+    </div>
+    <div class="rule-row">
+      <input class="input-field" id="reason-input" placeholder="Reason (optional)..." maxlength="60">
+    </div>
+    <div class="rule-row">
+      <button class="btn-sm btn-block" onclick="blockIP()">BLOCK IP</button>
+      <button class="btn-sm btn-allow" onclick="unblockIP()">UNBLOCK</button>
+      <button class="btn-sm" style="border-color:var(--blue);color:var(--blue)" onclick="whitelistIP()">WHITELIST</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">⊗ PORT FIREWALL</div>
+    <div class="rule-row">
+      <input class="input-field" id="port-input" placeholder="Port number..." type="number" min="1" max="65535">
+      <button class="btn-sm btn-block" onclick="blockPort()">BLOCK</button>
+    </div>
+    <div id="port-list" style="display:flex;flex-wrap:wrap;gap:0;margin-top:6px"></div>
+  </div>
+
+  <div class="panel" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+    <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>⊗ ACTIVE BLOCKS</span>
+      <span id="block-count" style="color:var(--red);font-family:var(--font-head);font-size:11px">0</span>
+    </div>
+    <div class="block-list" id="block-list">
+      <div class="empty-state">
+        <div class="empty-icon">🛡</div>
+        <div class="empty-text">NO ACTIVE BLOCKS</div>
+      </div>
+    </div>
+  </div>
+
+</aside>
+
+
+<!-- ═══════════ MAIN AREA ═══════════ -->
+<main class="main-area">
+
+  <!-- Stats strip -->
+  <div class="stats-strip">
+    <div class="stat-cell" id="sc-total">
+      <div class="stat-val" id="s-total">0</div>
+      <div class="stat-lbl">Total Packets</div>
+    </div>
+    <div class="stat-cell" id="sc-blocked">
+      <div class="stat-val danger" id="s-blocked">0</div>
+      <div class="stat-lbl">Blocked</div>
+    </div>
+    <div class="stat-cell" id="sc-alerted">
+      <div class="stat-val warn" id="s-alerted">0</div>
+      <div class="stat-lbl">Alerted</div>
+    </div>
+    <div class="stat-cell" id="sc-bans">
+      <div class="stat-val warn" id="s-bans">0</div>
+      <div class="stat-lbl">Auto-Bans</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-val" id="s-bytes">0 B</div>
+      <div class="stat-lbl">Traffic Volume</div>
+    </div>
+  </div>
+
+  <!-- Feed header -->
+  <div class="feed-header">
+    <div class="feed-title">⊕ LIVE PACKET FEED</div>
+    <div class="feed-mode" id="feed-mode">— STANDBY —</div>
+  </div>
+
+  <!-- Table head -->
+  <div class="table-head">
+    <div class="th">TIME</div>
+    <div class="th">SOURCE</div>
+    <div class="th">DEST</div>
+    <div class="th">SPORT</div>
+    <div class="th">DPORT</div>
+    <div class="th">PROTO</div>
+    <div class="th">REASON</div>
+    <div class="th">ACTION</div>
+  </div>
+
+  <!-- Packet rows -->
+  <div class="feed-body" id="feed-body">
+    <div class="empty-state" id="feed-empty">
+      <div class="empty-icon">📡</div>
+      <div class="empty-text">AWAITING SIGNAL — CLICK ENGAGE</div>
+    </div>
+  </div>
+
+</main>
+
+
+<!-- ═══════════ RIGHT SIDEBAR ═══════════ -->
+<aside class="sidebar-right">
+
+  <div class="panel">
+    <div class="panel-title">◈ ACTIVITY GRAPH</div>
+    <div class="spark-wrap" id="spark"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px">
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">60s AGO</span>
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">NOW</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">◈ TOP TALKERS</div>
+    <div id="talkers"></div>
+  </div>
+
+  <div class="panel" style="flex:1;overflow:hidden;display:flex;flex-direction:colum
+<div class="panel-title">◈ THREAT ALERTS</div>
+    <div style="flex:1;overflow-y:auto" id="alert-log">
+      <div class="empty-state">
+        <div class="empty-icon">✓</div>
+        <div class="empty-text">NO ALERTS</div>
+      </div>
+    </div>
+  </div>
+ 
+</aside>
+ 
+</div><!-- /layout -->
+ 
+ 
+<script>
+// ═══════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════
+const MAX_ROWS   = 120;
+const SPARK_BINS = 40;
+ 
+let running      = false;
+let evtSource    = null;
+let sparkData    = new Array(SPARK_BINS).fill(0);
+let blockedData  = new Array(SPARK_BINS).fill(0);
+let statsCache   = {};
+let alertCount   = 0;
+ 
+// ═══════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════
+function fmtBytes(b) {
+  if (b < 1024)       return b + ' B';
+  if (b < 1048576)    return (b/1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(2) + ' GB';
+}
+function scoreColor(s) {
+  if (s >= 0.78) return 'var(--red)';
+  if (s >= 0.5)  return 'var(--amber)';
+  return 'var(--green)';
+}
+ 
+function flashCell(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('updated');
+  void el.offsetWidth;
+  el.classList.add('updated');
+  setTimeout(() => el.classList.remove('updated'), 600);
+}
+ 
+// ═══════════════════════════════════════════════
+// Controls
+// ═══════════════════════════════════════════════
+async function startCapture() {
+  const r = await fetch('/api/start', {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) { alert(d.msg); return; }
+  running = true;
+  document.getElementById('btn-start').disabled = true;
+document.getElementById('btn-stop').disabled  = false;
+  const badge = document.getElementById('status-badge');
+  badge.className = 'status-badge active';
+  document.getElementById('status-text').textContent = d.live ? 'LIVE CAPTURE' : 'DEMO MODE';
+  document.getElementById('feed-mode').textContent    = d.live ? '● LIVE MODE' : '● DEMO MODE';
+  document.getElementById('feed-empty').style.display = 'none';
+  startSSE();
+  startPolling();
+}
+ 
+async function stopCapture() {
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  const r = await fetch('/api/stop', {method:'POST'});
+  const d = await r.json();
+  running = false;
+  document.getElementById('btn-start').disabled = false;
+  document.getElementById('btn-stop').disabled  = true;
+  const badge = document.getElementById('status-badge');
+badge.className = 'status-badge idle';
+  document.getElementById('status-text').textContent = 'IDLE';
+  document.getElementById('feed-mode').textContent   = `SAVED: ${d.path?.split('/').pop() || '—'}`;
+}
+ 
+// ═══════════════════════════════════════════════
+// SSE Packet Feed
+// ═══════════════════════════════════════════════
+function startSSE() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource('/api/stream');
+  evtSource.onmessage = (e) => {
+    const p = JSON.parse(e.data);
+    if (p.ping) return;
+    addPacketRow(p);
+    updateSpark(p.action === 'BLOCK');
+    if (p.action === 'BLOCK' || p.action === 'ALERT') addAlert(p);
+  };
+}
+function addPacketRow(p) {
+  const body = document.getElementById('feed-body');
+  const row  = document.createElement('div');
+ 
+  const actionClass = p.action === 'BLOCK' ? 'blocked' : p.action === 'ALERT' ? 'alert' : 'allowed';
+  const pillClass   = p.action === 'BLOCK' ? 'pill-block' : p.action === 'ALERT' ? 'pill-alert' : 'pill-allow';
+  const scoreW      = Math.round((p.score || 0) * 100);
+  const scColor     = scoreColor(p.score || 0);
+ 
+  row.className = `feed-row ${actionClass}`;
+  row.innerHTML = `
+    <div class="cell">${p.ts}</div>
+    <div class="cell src">${p.src}</div>
+    <div class="cell dst">${p.dst}</div>
+    <div class="cell">${p.sport || '—'}</div>
+    <div class="cell">${p.dport || '—'}</div>
+    <div class="cell">${p.proto}</div>
+    <div class="cell" title="${p.reason}" style="color:var(--text-dim)">${p.reason||'—'}</div>
+<div class="cell">
+      <span class="action-pill ${pillClass}">${p.action}</span>
+    </div>
+  `;
+  body.insertBefore(row, body.firstChild);
+ 
+  // Trim overflow
+  const rows = body.querySelectorAll('.feed-row');
+  if (rows.length > MAX_ROWS) rows[rows.length - 1].remove();
+}
+ 
+// ═══════════════════════════════════════════════
+// Spark Activity Graph
+// ═══════════════════════════════════════════════
+function updateSpark(isBlocked) {
+  sparkData[sparkData.length - 1]++;
+  if (isBlocked) blockedData[blockedData.length - 1]++;
+  renderSpark();
+}
+function shiftSpark() {
+  sparkData.shift(); sparkData.push(0);
+  blockedData.shift(); blockedData.push(0);
+  renderSpark();
+}
+ 
+function renderSpark() {
+  const wrap = document.getElementById('spark');
+  const max  = Math.max(...sparkData, 1);
+  wrap.innerHTML = sparkData.map((v, i) => {
+    const h = Math.round((v / max) * 56) + 2;
+    const isRed = blockedData[i] > 0;
+    return `<div class="spark-bar${isRed?' red':''}" style="height:${h}px" title="${v} pkts"></div>`;
+  }).join('');
+}
+ 
+setInterval(shiftSpark, 1500);
+// ═══════════════════════════════════════════════
+// Alert Log
+// ═══════════════════════════════════════════════
+function addAlert(p) {
+  const log = document.getElementById('alert-log');
+  const empty = log.querySelector('.empty-state');
+  if (empty) empty.remove();
+ 
+  alertCount++;
+  if (alertCount > 50) {
+    const items = log.querySelectorAll('.alert-item');
+    if (items.length >= 50) items[items.length - 1].remove();
+  }
+const div = document.createElement('div');
+  div.className = `alert-item ${p.action === 'BLOCK' ? 'critical' : ''}`;
+  div.innerHTML = `
+    <div class="alert-ts">${p.ts} · ${p.proto}</div>
+    <div class="alert-msg">${p.src} → ${p.dport} — ${p.reason || p.action}</div>
+  `;
+  log.insertBefore(div, log.firstChild);
+}
+ 
+// ═══════════════════════════════════════════════
+// Polling: stats, blocked list, top talkers
+// ═══════════════════════════════════════════════
+function startPolling() {
+  pollAll();
+  setInterval(pollAll, 2000);
+}
+ 
+async function pollAll() {
+  await Promise.all([fetchStats(), fetchBlocked(), fetchTalkers(), fetchPorts()]);
+}
+async function fetchStats() {
+  try {
+    const d = await (await fetch('/api/status')).json();
+    document.getElementById('s-total').textContent   = d.total.toLocaleString();
+    document.getElementById('s-blocked').textContent = d.blocked.toLocaleString();
+    document.getElementById('s-alerted').textContent = d.alerted.toLocaleString();
+    document.getElementById('s-bans').textContent    = d.auto_bans;
+    document.getElementById('s-bytes').textContent   = fmtBytes(d.bytes);
+    document.getElementById('h-pps').textContent     = Math.round(d.pps);
+    document.getElementById('h-total').textContent   = d.total.toLocaleString();
+    document.getElementById('h-blocks').textContent  = d.active_blocks;
+ 
+    if (d.total !== (statsCache.total || 0))   flashCell('sc-total');
+    if (d.blocked !== (statsCache.blocked||0)) flashCell('sc-blocked');
+    statsCache = d;
+  } catch(e) {}
+}
+async function fetchBlocked() {
+  try {
+    const list = await (await fetch('/api/blocked')).json();
+    const el   = document.getElementById('block-list');
+    document.getElementById('block-count').textContent = list.length;
+ 
+    if (list.length === 0) {
+      el.innerHTML = '<div class="empty-state"><div class="empty-icon">🛡</div><div class="empty-text">NO ACTIVE BLOCKS</div></div>';
+      return;
+    }
+    el.innerHTML = list.map(b => {
+      const sw = Math.round(b.score * 100);
+      const sc = b.score >= 0.78 ? 'var(--red)' : b.score >= 0.5 ? 'var(--amber)' : 'var(--green)';
+      return `
+<div class="block-item">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="block-ip">${b.ip}</span>
+              ${b.auto ? '<span class="block-auto-badge">AUTO</span>' : ''}
+            </div>
+            <div class="block-meta">${b.reason} · ${b.hits} hits</div>
+            ${b.score > 0 ? `<div class="score-bar-wrap"><div class="score-bar-track"><div class="score-bar-fill" style="width:${sw}%;background:${sc}"></div></div></div>` : ''}
+          </div>
+          <button class="btn-unblock" onclick="unblockIPDirect('${b.ip}')">✕</button>
+        </div>`;
+    }).join('');
+  } catch(e) {}
+}
+async function fetchTalkers() {
+  try {
+    const list = await (await fetch('/api/top_sources')).json();
+    const el   = document.getElementById('talkers');
+    if (!list.length) { el.innerHTML = '<div style="color:var(--text-dim);font-family:var(--font-mono);font-size:11px">No data yet</div>'; return; }
+    const max = list[0].count || 1;
+    el.innerHTML = list.map(t => `
+      <div class="talker-row">
+        <div class="talker-header">
+          <span class="talker-ip">${t.ip}</span>
+          <span class="talker-count">${t.count}</span>
+        </div>
+        <div class="talker-track">
+          <div class="talker-bar" style="width:${Math.round(t.count/max*100)}%"></div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+async function fetchPorts() {
+  try {
+    const list = await (await fetch('/api/blocked/ports')).json();
+    const el   = document.getElementById('port-list');
+    el.innerHTML = list.map(p => `
+      <div class="port-badge">:${p}
+        <button onclick="unblockPortDirect(${p})" title="Unblock">✕</button>
+      </div>`).join('');
+  } catch(e) {}
+}
+// ═══════════════════════════════════════════════
+// Rule Actions
+// ═══════════════════════════════════════════════
+async function blockIP() {
+  const ip     = document.getElementById('ip-input').value.trim();
+  const reason = document.getElementById('reason-input').value.trim() || 'Manual block';
+  if (!ip) return;
+  await fetch('/api/block/ip', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip, reason})});
+  document.getElementById('ip-input').value     = '';
+  document.getElementById('reason-input').value = '';
+  fetchBlocked();
+}
+async function unblockIP() {
+  const ip = document.getElementById('ip-input').value.trim();
+  if (!ip) return;
+  await fetch('/api/unblock/ip', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip})});
+  document.getElementById('ip-input').value = '';
+  fetchBlocked();
+}
+ 
+async function unblockIPDirect(ip) {
+  await fetch('/api/unblock/ip', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip})});
+  fetchBlocked();
+}
+async function whitelistIP() {
+  const ip = document.getElementById('ip-input').value.trim();
+  if (!ip) return;
+  await fetch('/api/whitelist', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip})});
+  document.getElementById('ip-input').value = '';
+}
+ 
+async function blockPort() {
+  const port = parseInt(document.getElementById('port-input').value);
+  if (!port || port < 1 || port > 65535) return;
+  await fetch('/api/block/port', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({port})});
+  document.getElementById('port-input').value = '';
+  fetchPorts();
+}
+async function unblockPortDirect(port) {
+  await fetch('/api/unblock/port', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({port})});
+  fetchPorts();
+}
+ 
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (document.activeElement.id === 'ip-input' ||
+        document.activeElement.id === 'reason-input') blockIP();
+    if (document.activeElement.id === 'port-input') blockPort();
+  }
+});
+ 
+// Kick off initial poll
+fetchStats(); fetchBlocked(); fetchTalkers(); fetchPorts();
+</script>
+ 
+</body>
+</html>

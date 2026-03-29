@@ -1,0 +1,14 @@
+{"src": "192.168.58.133", "dst": "151.101.193.91", "sport": 60694, "dport": 443, "proto": "TCP", "size": 93, "timestamp": 1774778300.6202548, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "151.101.193.91", "dst": "192.168.58.133", "sport": 443, "dport": 60694, "proto": "TCP", "size": 60, "timestamp": 1774778300.6207726, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "151.101.193.91", "dst": "192.168.58.133", "sport": 443, "dport": 60694, "proto": "TCP", "size": 93, "timestamp": 1774778300.644146, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "192.168.58.133", "dst": "151.101.193.91", "sport": 60694, "dport": 443, "proto": "TCP", "size": 54, "timestamp": 1774778300.6870143, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "192.168.58.133", "dst": "151.101.65.91", "sport": 35696, "dport": 443, "proto": "TCP", "size": 136, "timestamp": 1774778327.2558503, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "192.168.58.133", "dst": "151.101.65.91", "sport": 35696, "dport": 443, "proto": "TCP", "size": 310, "timestamp": 1774778327.2568743, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "151.101.65.91", "dst": "192.168.58.133", "sport": 443, "dport": 35696, "proto": "TCP", "size": 60, "timestamp": 1774778327.2584648, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "151.101.65.91", "dst": "192.168.58.133", "sport": 443, "dport": 35696, "proto": "TCP", "size": 60, "timestamp": 1774778327.2592185, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "151.101.65.91", "dst": "192.168.58.133", "sport": 443, "dport": 35696, "proto": "TCP", "size": 3792, "timestamp": 1774778327.5684109, "action": "ALLOW", "reason": "", "threat_score": 0.056}
+{"src": "192.168.58.133", "dst": "151.101.65.91", "sport": 35696, "dport": 443, "proto": "TCP", "size": 54, "timestamp": 1774778327.5694141, "action": "ALLOW", "reason": "", "threat_score": 0.067}
+{"src": "34.107.243.93", "dst": "192.168.58.133", "sport": 443, "dport": 44416, "proto": "TCP", "size": 78, "timestamp": 1774778330.5668569, "action": "ALLOW", "reason": "", "threat_score": 0.0}
+{"src": "192.168.58.133", "dst": "34.107.243.93", "sport": 44416, "dport": 443, "proto": "TCP", "size": 54, "timestamp": 1774778330.5675418, "action": "ALLOW", "reason": "", "threat_score": 0.008}
+{"src": "192.168.58.133", "dst": "34.107.243.93", "sport": 44416, "dport": 443, "proto": "TCP", "size": 82, "timestamp": 1774778330.5682273, "action": "ALLOW", "reason": "", "threat_score": 0.01}
+{"src": "34.107.243.93", "dst": "192.168.58.133", "sport": 443, "dport": 44416, "proto": "TCP", "size": 60, "timestamp": 1774778330.5688102, "action": "ALLOW", "reason": "", "threat_score": 0.0}

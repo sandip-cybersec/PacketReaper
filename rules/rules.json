@@ -1,0 +1,42 @@
+{
+  "blocked_ips": [
+    {
+      "ip": "192.168.58.2",
+      "reason": "Anomaly score 0.95",
+      "timestamp": 1774774782.1133542,
+      "auto": true,
+      "ttl": 600,
+      "hit_count": 8,
+      "threat_score": 0.953
+    },
+    {
+      "ip": "216.58.203.10",
+      "reason": "Anomaly score 0.78",
+      "timestamp": 1774774782.373462,
+      "auto": true,
+      "ttl": 600,
+      "hit_count": 3,
+      "threat_score": 0.781
+    },
+    {
+      "ip": "142.251.42.227",
+      "reason": "Anomaly score 0.82",
+      "timestamp": 1774774782.3863971,
+      "auto": true,
+      "ttl": 600,
+      "hit_count": 69,
+      "threat_score": 0.824
+    },
+    {
+      "ip": "45.33.32.156",
+      "reason": "Test block",
+      "timestamp": 1774775063.9485373,
+      "auto": false,
+      "ttl": 0,
+      "hit_count": 1,
+      "threat_score": 0.0
+    }
+  ],
+  "blocked_ports": [],
+  "allowed_ips": []
+}
