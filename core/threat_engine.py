@@ -1,0 +1,500 @@
+"""
+PacketReaper - Threat Engine
+Detects: ICMP flood, SYN flood, UDP flood, port scan, HTTP DDoS, ARP spoof.
+Auto-blocks via iptables. Manages blocklist with TTL-based expiry.
+"""
+
+import time
+import threading
+import json
+import os
+import math
+import subprocess
+from collections import defaultdict, deque
+from dataclasses import dataclass, field, asdict
+from typing import Dict, Set, Optional, Tuple, Any
+
+# ─────────────────────────────────────────────
+# Data Structures
+# ─────────────────────────────────────────────
+
+@dataclass
+class BlockEntry:
+    ip: str
+    reason: str
+    timestamp: float
+    auto: bool = True
+    ttl: int = 0          # 0 = permanent
+    hit_count: int = 1
+    threat_score: float = 0.0
+    attack_type: str = ""
+
+@dataclass
+class PacketRecord:
+    src: str
+    dst: str
+    sport: int
+    dport: int
+    proto: str
+    size: int
+    timestamp: float
+    action: str = "ALLOW"
+    reason: str = ""
+    threat_score: float = 0.0
+    attack_type: str = ""
+
+@dataclass
+class LiveStats:
+    total_packets: int = 0
+    blocked_packets: int = 0
+    alerted_packets: int = 0
+    bytes_total: int = 0
+    active_blocks: int = 0
+    auto_bans: int = 0
+    packets_per_sec: float = 0.0
+    icmp_flood_count: int = 0
+    syn_flood_count: int = 0
+    udp_flood_count: int = 0
+    portscan_count: int = 0
+    arp_spoof_count: int = 0
+    http_ddos_count: int = 0
+
+
+# ─────────────────────────────────────────────
+# Anomaly Scorer
+# ─────────────────────────────────────────────
+
+class AnomalyScorer:
+    WINDOW = 15
+
+    def __init__(self):
+        self._history: Dict[str, deque] = defaultdict(deque)
+
+    def record(self, ip: str, dport: int, size: int, ts: float):
+        q = self._history[ip]
+        q.append((ts, dport, size))
+        while q and ts - q[0][0] > self.WINDOW:
+            q.popleft()
+
+    def score(self, ip: str) -> float:
+        q = self._history.get(ip)
+        if not q or len(q) < 3:
+            return 0.0
+
+        ports = [d for _, d, _ in q]
+        sizes = [s for _, _, s in q]
+        n     = len(q)
+        duration = max(q[-1][0] - q[0][0], 0.001)
+
+        port_counts = defaultdict(int)
+        for p in ports:
+            port_counts[p] += 1
+        total     = sum(port_counts.values())
+        entropy   = -sum((c/total) * math.log2(c/total) for c in port_counts.values() if c > 0)
+        max_entr  = math.log2(max(len(port_counts), 1))
+        entr_score = (entropy / max_entr) if max_entr > 0 else 0
+
+        pps        = n / duration
+        rate_score = min(pps / 60.0, 1.0)
+
+        if len(sizes) > 1:
+            mean_s   = sum(sizes) / len(sizes)
+            variance = sum((s - mean_s) ** 2 for s in sizes) / len(sizes)
+            cv       = math.sqrt(variance) / (mean_s + 1)
+            size_score = max(0.0, 1.0 - cv) * rate_score
+        else:
+            size_score = 0.0
+
+        final = (entr_score * 0.45) + (rate_score * 0.35) + (size_score * 0.20)
+        return round(min(final, 1.0), 3)
+
+
+# ─────────────────────────────────────────────
+# iptables Helper
+# ─────────────────────────────────────────────
+
+class IPTables:
+    _enabled = None
+
+    @classmethod
+    def available(cls) -> bool:
+        if cls._enabled is None:
+            try:
+                r = subprocess.run(["iptables", "-L", "-n"],
+                                   capture_output=True, timeout=3)
+                cls._enabled = (r.returncode == 0)
+            except Exception:
+                cls._enabled = False
+        return cls._enabled
+
+    @classmethod
+    def block_ip(cls, ip: str) -> bool:
+        if not cls.available():
+            return False
+        try:
+            # Drop in INPUT chain
+            subprocess.run(
+                ["iptables", "-I", "INPUT", "-s", ip, "-j", "DROP"],
+                capture_output=True, timeout=5
+            )
+            # Drop in FORWARD chain too
+            subprocess.run(
+                ["iptables", "-I", "FORWARD", "-s", ip, "-j", "DROP"],
+                capture_output=True, timeout=5
+            )
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def unblock_ip(cls, ip: str) -> bool:
+        if not cls.available():
+            return False
+        try:
+            for chain in ("INPUT", "FORWARD"):
+                subprocess.run(
+                    ["iptables", "-D", chain, "-s", ip, "-j", "DROP"],
+                    capture_output=True, timeout=5
+                )
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def block_icmp(cls) -> bool:
+        """Block all incoming ICMP echo requests."""
+        if not cls.available():
+            return False
+        try:
+            subprocess.run(
+                ["iptables", "-I", "INPUT", "-p", "icmp",
+                 "--icmp-type", "echo-request", "-j", "DROP"],
+                capture_output=True, timeout=5
+            )
+            return True
+        except Exception:
+            return False
+
+
+# ─────────────────────────────────────────────
+# Threat Engine
+# ─────────────────────────────────────────────
+
+class ThreatEngine:
+    # Detection thresholds
+    PORTSCAN_UNIQUE_PORTS  = 12       # unique ports in window → port scan
+    FLOOD_PPS_THRESHOLD    = 70       # generic pps → flood
+    ICMP_PPS_THRESHOLD     = 5       # ICMP pps → ping flood (much lower!)
+    SYN_PPS_THRESHOLD      = 30       # SYN packets/s → SYN flood
+    UDP_PPS_THRESHOLD      = 50       # UDP pps → UDP flood
+    HTTP_PPS_THRESHOLD     = 60       # HTTP requests/s → HTTP DDoS
+    ARP_RATE_THRESHOLD     = 8        # ARP packets in window → ARP spoof
+    RATE_WINDOW            = 10       # seconds for rate calculations
+    AUTO_BAN_TTL           = 600      # seconds before auto-ban expires
+    ANOMALY_BAN_THRESHOLD  = 0.78
+
+    def __init__(self, rules_path: str = "rules/rules.json"):
+        self.rules_path    = rules_path
+        self.blocked_ips:   Dict[str, BlockEntry] = {}
+        self.blocked_ports: Set[int]  = set()
+        self.allowed_ips:   Set[str]  = set()
+
+        # Per-IP rate tracking
+        self._ip_ts:    Dict[str, deque] = defaultdict(deque)   # all packets
+        self._ip_icmp:  Dict[str, deque] = defaultdict(deque)   # ICMP only
+        self._ip_syn:   Dict[str, deque] = defaultdict(deque)   # SYN only
+        self._ip_udp:   Dict[str, deque] = defaultdict(deque)   # UDP only
+        self._ip_http:  Dict[str, deque] = defaultdict(deque)   # HTTP only
+        self._ip_arp:   Dict[str, deque] = defaultdict(deque)   # ARP only
+        self._ip_ports: Dict[str, deque] = defaultdict(deque)   # (ts, dport)
+
+        self._source_counts: Dict[str, int] = defaultdict(int)
+        self._pps_window: deque = deque()
+
+        self.scorer = AnomalyScorer()
+        self.stats  = LiveStats()
+        self._lock  = threading.Lock()
+        self._load_rules()
+
+        threading.Thread(target=self._ttl_loop, daemon=True).start()
+
+    # ── Persistence ──────────────────────────────────────────────
+
+    def _load_rules(self):
+        os.makedirs(os.path.dirname(self.rules_path) or ".", exist_ok=True)
+        if os.path.exists(self.rules_path):
+            try:
+                with open(self.rules_path) as f:
+                    data = json.load(f)
+                for e in data.get("blocked_ips", []):
+                    b = BlockEntry(**{k: v for k, v in e.items()
+                                     if k in BlockEntry.__dataclass_fields__})
+                    self.blocked_ips[b.ip] = b
+                self.blocked_ports = set(data.get("blocked_ports", []))
+                self.allowed_ips   = set(data.get("allowed_ips",   []))
+            except Exception:
+                pass
+
+    def save_rules(self):
+        data = {
+            "blocked_ips":   [asdict(b) for b in self.blocked_ips.values()],
+            "blocked_ports": list(self.blocked_ports),
+            "allowed_ips":   list(self.allowed_ips),
+        }
+        os.makedirs(os.path.dirname(self.rules_path) or ".", exist_ok=True)
+        with open(self.rules_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    # ── Public API ───────────────────────────────────────────────
+
+    def block_ip(self, ip: str, reason: str = "Manual", ttl: int = 0) -> bool:
+        with self._lock:
+            if ip in self.blocked_ips:
+                return False
+            self.blocked_ips[ip] = BlockEntry(
+                ip=ip, reason=reason, timestamp=time.time(),
+                auto=False, ttl=ttl
+            )
+        IPTables.block_ip(ip)
+        self.save_rules()
+        return True
+
+    def unblock_ip(self, ip: str) -> bool:
+        with self._lock:
+            if ip not in self.blocked_ips:
+                return False
+            del self.blocked_ips[ip]
+        IPTables.unblock_ip(ip)
+        self.save_rules()
+        return True
+
+    def block_port(self, port: int) -> bool:
+        with self._lock:
+            if port in self.blocked_ports:
+                return False
+            self.blocked_ports.add(port)
+        self.save_rules()
+        return True
+
+    def unblock_port(self, port: int) -> bool:
+        with self._lock:
+            self.blocked_ports.discard(port)
+        self.save_rules()
+        return True
+
+    def whitelist_ip(self, ip: str):
+        with self._lock:
+            self.allowed_ips.add(ip)
+        self.save_rules()
+
+    # ── Core Analysis ────────────────────────────────────────────
+
+    def analyze(self, src: str, dst: str, sport: int, dport: int,
+                proto: str, size: int,
+                extra: Optional[Dict[str, Any]] = None) -> PacketRecord:
+        now   = time.time()
+        extra = extra or {}
+
+        with self._lock:
+            self.stats.total_packets += 1
+            self.stats.bytes_total   += size
+            self._source_counts[src] += 1
+            self._pps_window.append(now)
+            while self._pps_window and now - self._pps_window[0] > 1.0:
+                self._pps_window.popleft()
+            self.stats.packets_per_sec = len(self._pps_window)
+
+            rec = PacketRecord(
+                src=src, dst=dst, sport=sport, dport=dport,
+                proto=proto, size=size, timestamp=now
+            )
+
+            # Whitelist check
+            if src in self.allowed_ips:
+                rec.action = "ALLOW"
+                rec.reason = "Whitelisted"
+                return rec
+
+            # Already blocked
+            if src in self.blocked_ips:
+                self.blocked_ips[src].hit_count += 1
+                rec.action = "BLOCK"
+                rec.reason  = self.blocked_ips[src].reason
+                rec.attack_type = self.blocked_ips[src].attack_type
+                self.stats.blocked_packets += 1
+                return rec
+
+            # Blocked port
+            if dport in self.blocked_ports:
+                rec.action = "BLOCK"
+                rec.reason = f"Port {dport} blocked"
+                self.stats.blocked_packets += 1
+                return rec
+
+            # ── Attack Detection ────────────────────────────────
+            attack_type, reason = self._detect(src, dport, proto, now, extra)
+
+            # AI anomaly scoring
+            self.scorer.record(src, dport, size, now)
+            score         = self.scorer.score(src)
+            rec.threat_score = score
+
+            if attack_type or score >= self.ANOMALY_BAN_THRESHOLD:
+                final_reason = reason if attack_type else f"Anomaly score {score:.2f}"
+                final_type   = attack_type or "ANOMALY"
+                self._auto_ban(src, final_reason, score, final_type)
+                self._update_attack_stat(final_type)
+                rec.action      = "BLOCK"
+                rec.reason      = final_reason
+                rec.attack_type = final_type
+                self.stats.blocked_packets += 1
+                self.stats.alerted_packets += 1
+                return rec
+
+            if score >= 0.5:
+                rec.action = "ALERT"
+                rec.reason = f"Suspicious (score {score:.2f})"
+                self.stats.alerted_packets += 1
+                return rec
+
+            rec.action = "ALLOW"
+            return rec
+
+    def _detect(self, src: str, dport: int, proto: str,
+                now: float, extra: dict) -> Tuple[str, str]:
+        w = self.RATE_WINDOW
+
+        # Helper: append to deque, prune, return count-per-second
+        def _rate(q: deque) -> float:
+            q.append(now)
+            while q and now - q[0] > w:
+                q.popleft()
+            return len(q) / w
+
+        # ── ICMP flood (ping flood) ──────────────────────────────
+        if proto == "ICMP":
+            icmp_type = extra.get("icmp_type", -1)
+            if icmp_type == 8:  # echo-request only
+                pps = _rate(self._ip_icmp[src])
+                if pps >= self.ICMP_PPS_THRESHOLD:
+                    return "ICMP_FLOOD", f"Ping flood ({pps:.0f} pps)"
+
+        # ── SYN flood ───────────────────────────────────────────
+        if proto == "TCP":
+            flags = extra.get("tcp_flags", 0)
+            if flags & 0x02 and not (flags & 0x10):  # SYN set, ACK not set
+                pps = _rate(self._ip_syn[src])
+                if pps >= self.SYN_PPS_THRESHOLD:
+                    return "SYN_FLOOD", f"SYN flood ({pps:.0f} pps)"
+
+        # ── UDP flood ────────────────────────────────────────────
+        if proto == "UDP":
+            pps = _rate(self._ip_udp[src])
+            if pps >= self.UDP_PPS_THRESHOLD:
+                return "UDP_FLOOD", f"UDP flood ({pps:.0f} pps)"
+
+        # ── HTTP DDoS ────────────────────────────────────────────
+        if proto == "TCP" and dport in (80, 443, 8080, 8443):
+            pps = _rate(self._ip_http[src])
+            if pps >= self.HTTP_PPS_THRESHOLD:
+                return "HTTP_DDOS", f"HTTP DDoS ({pps:.0f} req/s)"
+
+        # ── ARP spoofing ─────────────────────────────────────────
+        if proto == "ARP":
+            arp_op = extra.get("arp_op", 1)
+            if arp_op == 2:  # is-at (reply / gratuitous)
+                pps = _rate(self._ip_arp[src])
+                if pps >= self.ARP_RATE_THRESHOLD / w:
+                    return "ARP_SPOOF", f"ARP spoofing ({pps*w:.0f} replies/{w}s)"
+
+        # ── Port scan ────────────────────────────────────────────
+        pt_q = self._ip_ports[src]
+        pt_q.append((now, dport))
+        while pt_q and now - pt_q[0][0] > w:
+            pt_q.popleft()
+
+        # General packet rate
+        ts_q = self._ip_ts[src]
+        _rate(ts_q)  # just push the timestamp
+
+        unique_ports = len({p for _, p in pt_q})
+        if unique_ports >= self.PORTSCAN_UNIQUE_PORTS:
+            return "PORT_SCAN", f"Port scan ({unique_ports} ports/{w}s)"
+
+        # Generic flood fallback
+        all_pps = len(ts_q) / w
+        if all_pps >= self.FLOOD_PPS_THRESHOLD:
+            return "FLOOD", f"Packet flood ({all_pps:.0f} pps)"
+
+        return "", ""
+
+    def _update_attack_stat(self, attack_type: str):
+        m = {
+            "ICMP_FLOOD": "icmp_flood_count",
+            "SYN_FLOOD":  "syn_flood_count",
+            "UDP_FLOOD":  "udp_flood_count",
+            "PORT_SCAN":  "portscan_count",
+            "ARP_SPOOF":  "arp_spoof_count",
+            "HTTP_DDOS":  "http_ddos_count",
+        }
+        attr = m.get(attack_type)
+        if attr:
+            setattr(self.stats, attr, getattr(self.stats, attr) + 1)
+
+    def _auto_ban(self, ip: str, reason: str,
+                  score: float = 0.0, attack_type: str = ""):
+        if ip not in self.blocked_ips:
+            self.blocked_ips[ip] = BlockEntry(
+                ip=ip, reason=reason, timestamp=time.time(),
+                auto=True, ttl=self.AUTO_BAN_TTL,
+                threat_score=score, attack_type=attack_type
+            )
+            self.stats.auto_bans += 1
+            IPTables.block_ip(ip)
+
+    def _ttl_loop(self):
+        while True:
+            time.sleep(30)
+            now = time.time()
+            with self._lock:
+                expired = [
+                    ip for ip, b in self.blocked_ips.items()
+                    if b.ttl > 0 and (now - b.timestamp) >= b.ttl
+                ]
+                for ip in expired:
+                    IPTables.unblock_ip(ip)
+                    del self.blocked_ips[ip]
+
+    # ── Snapshot helpers ─────────────────────────────────────────
+
+    def get_top_sources(self, n: int = 8):
+        with self._lock:
+            return sorted(self._source_counts.items(), key=lambda x: -x[1])[:n]
+
+    def get_blocked_list(self):
+        with self._lock:
+            return list(self.blocked_ips.values())
+
+    def get_blocked_ports(self):
+        with self._lock:
+            return list(self.blocked_ports)
+
+    def snapshot(self) -> dict:
+        s = self.stats
+        with self._lock:
+            return {
+                "total":          s.total_packets,
+                "blocked":        s.blocked_packets,
+                "alerted":        s.alerted_packets,
+                "bytes":          s.bytes_total,
+                "active_blocks":  len(self.blocked_ips),
+                "auto_bans":      s.auto_bans,
+                "pps":            s.packets_per_sec,
+                "icmp_flood":     s.icmp_flood_count,
+                "syn_flood":      s.syn_flood_count,
+                "udp_flood":      s.udp_flood_count,
+                "portscan":       s.portscan_count,
+                "arp_spoof":      s.arp_spoof_count,
+                "http_ddos":      s.http_ddos_count,
+                "iptables":       IPTables.available(),
+            }
